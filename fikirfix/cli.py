@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
+import traceback
 
 from fikirfix import __version__
 
@@ -25,7 +26,13 @@ def root(ctx: typer.Context):
 
 
 @app.command()
-def run(prompt: str = typer.Argument(..., help="Prompt for the agent"), verbose: bool = typer.Option(False, "--verbose", help="Show verbose output")):
+def run(
+    prompt: str = typer.Argument(..., help="Prompt for the agent"),
+    verbose: bool = typer.Option(False, "--verbose", help="Show verbose output"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change without applying writes"),
+    allow_writes: bool = typer.Option(False, "--allow-writes", help="Allow write operations (opt-in)"),
+    confirm: bool = typer.Option(False, "--confirm", help="Confirm that you want to apply writes when allowed"),
+):
     """Run the LLM-backed agent with a prompt.
 
     Example: fikirfix run "fix the bug: 3 + 7 * 2 shouldn't be 20"
@@ -41,6 +48,12 @@ def run(prompt: str = typer.Argument(..., help="Prompt for the agent"), verbose:
     sys.argv = [str(main_path), prompt]
     if verbose:
         sys.argv.append("--verbose")
+    if dry_run:
+        sys.argv.append("--dry-run")
+    if allow_writes:
+        sys.argv.append("--allow-writes")
+    if confirm:
+        sys.argv.append("--confirm")
     try:
         runpy.run_path(str(main_path), run_name="__main__")
     except Exception as exc:
@@ -58,11 +71,32 @@ def calc(expression: str = typer.Argument(..., help="Expression to evaluate, e.g
         raise typer.Exit(code=2)
     console.rule("Calculator")
     sys.argv = [str(calc_main), expression]
+    # Run from the calculator directory so imports like `from pkg...` resolve
+    prev_cwd = os.getcwd()
+    prev_sys_path = list(sys.path)
     try:
+        # Ensure imports like `from pkg...` resolve when running via runpy
+        sys.path.insert(0, str(calc_main.parent))
+        os.chdir(str(calc_main.parent))
         runpy.run_path(str(calc_main), run_name="__main__")
     except Exception as exc:
         console.print(f"[red]Execution failed:[/red] {exc}")
+        # Print full traceback to aid test debugging
+        import traceback as _tb
+
+        _tb.print_exc()
         raise typer.Exit(code=3)
+    finally:
+        # attempt to restore previous working directory first
+        try:
+            os.chdir(prev_cwd)
+        except Exception:
+            pass
+        # always restore sys.path to its previous state
+        try:
+            sys.path[:] = prev_sys_path
+        except Exception:
+            pass
 
 
 @app.command()

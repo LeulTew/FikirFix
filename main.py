@@ -13,6 +13,7 @@ from functions.get_files_info import (
 )
 from functions.get_files_info import get_file_content, write_file
 from functions.run_python import run_python_file
+from functions.audit import log_tool_call
 
 load_dotenv()
 API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -75,14 +76,29 @@ FUNCTION_EXECUTORS = {
 
 
 def parse_args(raw_args):
+    """Parse CLI args. Supports --verbose, --allow-writes, --confirm."""
     verbose = False
-    if raw_args and raw_args[-1] == "--verbose":
+    allow_writes = False
+    confirm = False
+    dry_run = False
+    # Simple flag parsing
+    if "--verbose" in raw_args:
         verbose = True
-        raw_args = raw_args[:-1]
+        raw_args = [a for a in raw_args if a != "--verbose"]
+    if "--allow-writes" in raw_args:
+        allow_writes = True
+        raw_args = [a for a in raw_args if a != "--allow-writes"]
+    if "--confirm" in raw_args:
+        confirm = True
+        raw_args = [a for a in raw_args if a != "--confirm"]
+    if "--dry-run" in raw_args:
+        dry_run = True
+        raw_args = [a for a in raw_args if a != "--dry-run"]
+
     if not raw_args:
-        print('Error: missing prompt argument. Usage: uv run main.py "your prompt" [--verbose]')
+        print('Error: missing prompt argument. Usage: uv run main.py "your prompt" [--verbose] [--allow-writes --confirm]')
         sys.exit(1)
-    return " ".join(raw_args), verbose
+    return " ".join(raw_args), verbose, allow_writes, confirm, dry_run
 
 
 def build_messages(user_prompt):
@@ -102,10 +118,10 @@ def extract_function_calls(response):
     return calls
 
 
-def handle_function_calls(function_calls, verbose):
+def handle_function_calls(function_calls, verbose, allow_writes=False, confirm=False, dry_run=False):
     for fc in function_calls:
         # Use call_function to perform the call and get a types.Content result
-        function_result = call_function(fc, verbose=verbose)
+        function_result = call_function(fc, verbose=verbose, allow_writes=allow_writes, confirm=confirm, dry_run=dry_run)
         # Validate result
         prt = function_result.parts[0]
         func_resp = getattr(prt, "function_response", None)
@@ -115,7 +131,7 @@ def handle_function_calls(function_calls, verbose):
             print(f"-> {func_resp.response}")
 
 
-def call_function(function_call_part, verbose=False):
+def call_function(function_call_part, verbose=False, allow_writes=False, confirm=False, dry_run=False):
     """Execute a function chosen by the LLM and return a types.Content wrapping the response.
 
     The function_call_part is expected to have .name and .args.
@@ -162,16 +178,41 @@ def call_function(function_call_part, verbose=False):
     kwargs["working_directory"] = "calculator"
 
     try:
-        result = func(**kwargs)
+        # Gate write operations: require explicit allow_writes and confirm
+        if function_name == "write_file":
+            # Dry-run: compute unified diff and skip actual write
+            target_path = kwargs.get("file_path", "")
+            content = kwargs.get("content", "")
+            abs_target = os.path.abspath(os.path.join("calculator", target_path))
+            if dry_run:
+                # Read existing content if present
+                try:
+                    with open(abs_target, "r", encoding="utf-8", errors="replace") as f:
+                        old = f.read().splitlines()
+                except Exception:
+                    old = []
+                import difflib
+
+                new = content.splitlines()
+                diff = "\n".join(difflib.unified_diff(old, new, fromfile=target_path + " (current)", tofile=target_path + " (proposed)", lineterm=""))
+                result = f"DRY-RUN unified diff:\n{diff if diff else '(no changes)'}"
+            else:
+                if not allow_writes:
+                    result = 'Error: write operations are disabled. Pass --allow-writes to enable.'
+                elif not confirm:
+                    result = 'Error: write operations require --confirm to proceed.'
+                else:
+                    result = func(**kwargs)
+        else:
+            result = func(**kwargs)
     except Exception as e:
-            return types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_function_response(
-                        name=function_name, response={"error": str(e)}
-                    )
-                ],
-            )
+        result = f"Error during function execution: {e}"
+    # Audit log every tool call
+    try:
+        log_tool_call(function_name, kwargs, result)
+    except Exception:
+        pass
+
 
     # Helpful fallback: if reading a file failed because it wasn't found,
     # try to locate the file under the working directory (calculator) and retry.
@@ -203,10 +244,8 @@ def call_function(function_call_part, verbose=False):
                     break
 
     return types.Content(
-            role="user",
-        parts=[
-            types.Part.from_function_response(name=function_name, response={"result": result})
-        ],
+        role="user",
+        parts=[types.Part.from_function_response(name=function_name, response={"result": result})],
     )
 
 
@@ -220,7 +259,7 @@ def print_usage_stats(response, user_prompt):
 
 
 def main():
-    user_prompt, verbose = parse_args(sys.argv[1:])
+    user_prompt, verbose, allow_writes, confirm, dry_run = parse_args(sys.argv[1:])
 
     if not CLIENT:
         print("GEMINI_API_KEY not found in environment. Create a .env with GEMINI_API_KEY=\"your_key\"")
@@ -293,7 +332,7 @@ def main():
                         continue
 
                     # Execute and record
-                    function_result = call_function(fc, verbose=verbose)
+                    function_result = call_function(fc, verbose=verbose, allow_writes=allow_writes, confirm=confirm, dry_run=dry_run)
                     messages.append(function_result)
                     last_call_key = key
                     # Print the function result so the test harness can observe outputs

@@ -12,3 +12,10 @@ dependencies = [
 
 [project.scripts]
 fikirfix = "fikirfix.cli:main"
+
+[build-system]
+requires = ["setuptools>=65.5.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["fikirfix", "functions", "calculator"]
