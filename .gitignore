@@ -14,3 +14,5 @@ wheels/
 calculator/
 # Ignore internal deployment plan
 DEPLOY_PLAN.md
+# Ignore pytest cache
+.pytest_cache/
