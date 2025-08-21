@@ -14,7 +14,6 @@ from functions.get_files_info import (
 from functions.get_files_info import get_file_content, write_file
 from functions.run_python import run_python_file
 
-# Load environment / client setup
 load_dotenv()
 API_KEY = os.environ.get("GEMINI_API_KEY")
 CLIENT = genai.Client(api_key=API_KEY) if API_KEY else None
@@ -44,7 +43,7 @@ Behavior and rules:
 Be conservative with calls: prefer listing, then targeted reads, then runs/writes. Always include tool output evidence in your final answer.
 """
 
-# Tool declarations (extendable)
+# Tool declarations (registered helpers)
 AVAILABLE_FUNCTIONS = types.Tool(
     function_declarations=[
         schema_get_files_info,
@@ -54,7 +53,7 @@ AVAILABLE_FUNCTIONS = types.Tool(
     ]
 )
 
-# Runtime mapping of function names to executors (wraps security context)
+# Runtime mapping: safe wrappers that constrain operations to the `calculator` directory
 FUNCTION_EXECUTORS = {
     "get_files_info": lambda args: get_files_info(
         "calculator", args.get("directory", ".") if hasattr(args, "get") else "."
