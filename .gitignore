@@ -12,3 +12,5 @@ wheels/
 
 # Ignore local calculator project
 calculator/
+# Ignore internal deployment plan
+DEPLOY_PLAN.md
